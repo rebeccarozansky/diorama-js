@@ -1,0 +1,7 @@
+{
+  "name": "esm-confetti",
+  "private": true,
+  "dependencies": {
+    "canvas-confetti": "^1.9.0"
+  }
+}

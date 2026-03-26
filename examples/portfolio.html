@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diorama — Portfolio Example</title>
+  <style>
+    * { margin: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f7fafc;
+      color: #1a202c;
+    }
+    header {
+      text-align: center;
+      padding: 3rem 1rem 2rem;
+    }
+    header h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+    header p { color: #718096; font-size: 1.1rem; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+      gap: 2rem;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 2rem 4rem;
+    }
+    .card {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+      overflow: hidden;
+    }
+    .card h2 {
+      padding: 1rem 1.25rem 0.25rem;
+      font-size: 1.1rem;
+    }
+    .card p {
+      padding: 0 1.25rem 0.75rem;
+      color: #718096;
+      font-size: 0.9rem;
+    }
+    .card .preview {
+      border-top: 1px solid #e2e8f0;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>My Projects</h1>
+    <p>Live previews powered by <strong>Diorama</strong> — click a card to launch</p>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <h2>🧮 Vanilla Counter</h2>
+      <p>A simple counter built with HTML, CSS, and vanilla JS.</p>
+      <div class="preview" id="counter-preview"></div>
+    </div>
+
+    <div class="card">
+      <h2>🎉 Confetti Button</h2>
+      <p>ESM imports in action — canvas-confetti loaded from CDN.</p>
+      <div class="preview" id="confetti-preview"></div>
+    </div>
+
+    <div class="card">
+      <h2>📝 React Todo App</h2>
+      <p>A todo list built with React and TypeScript.</p>
+      <div class="preview" id="todo-preview"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { Diorama } from '../dist/index.js';
+
+    const diorama = new Diorama();
+
+    const projects = [
+      { container: '#counter-preview',  repo: 'user/vanilla-counter' },
+      { container: '#confetti-preview',  repo: 'user/esm-confetti' },
+      { container: '#todo-preview',      repo: 'user/react-todo' },
+    ];
+
+    for (const { container, repo } of projects) {
+      diorama.render(container, repo, {
+        height: '350px',
+        loading: 'click',
+        onError: (err) => console.warn(`[${repo}]`, err.message),
+      });
+    }
+  </script>
+</body>
+</html>

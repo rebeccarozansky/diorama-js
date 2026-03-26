@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Diorama CSS Diagnostic</title>
+  <style>
+    body { font-family: system-ui; margin: 2rem; background: #f5f5f5; }
+    h1 { font-size: 1.5rem; }
+    .test-frame { 
+      width: 100%; max-width: 600px; height: 300px; border: 2px solid #ccc; 
+      margin: 1rem 0; display: block; background: #fff;
+    }
+    .label { font-weight: bold; margin-top: 1.5rem; }
+    pre { background: #1a1a1a; color: #eee; padding: 1rem; border-radius: 6px; overflow: auto; max-height: 300px; font-size: 12px; }
+    .pass { color: green; } .fail { color: red; }
+  </style>
+</head>
+<body>
+  <h1>🔍 Diorama CSS Diagnostic</h1>
+  <p>This page tests whether Diorama's assembled HTML renders CSS correctly in sandboxed iframes.</p>
+
+  <div class="label">Test 1: Inline &lt;style&gt; in blob URL iframe (sandbox=allow-scripts)</div>
+  <iframe id="test1" class="test-frame" sandbox="allow-scripts"></iframe>
+
+  <div class="label">Test 2: Import map + data URI modules + CSS &lt;style&gt;</div>
+  <iframe id="test2" class="test-frame" sandbox="allow-scripts"></iframe>
+
+  <div class="label">Test 3: Full Vite-like assembly (CSS from JS import, import map, bare specifiers)</div>
+  <iframe id="test3" class="test-frame" sandbox="allow-scripts"></iframe>
+
+  <div class="label">Generated HTML for Test 3:</div>
+  <pre id="html-output"></pre>
+
+  <div class="label">Results:</div>
+  <pre id="results"></pre>
+
+  <script type="module">
+    const results = [];
+    function log(msg) { results.push(msg); document.getElementById('results').textContent = results.join('\n'); }
+
+    // ─── Test 1: Simple CSS in blob URL iframe ──────────────
+    const html1 = `<!DOCTYPE html>
+<html><head>
+<style>
+body { background: #264653; color: white; font-family: system-ui; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+h1 { font-size: 2rem; }
+.accent { color: #e9c46a; }
+</style>
+</head><body>
+<h1>CSS works! <span class="accent">Styled.</span></h1>
+</body></html>`;
+
+    const blob1 = new Blob([html1], { type: 'text/html' });
+    document.getElementById('test1').src = URL.createObjectURL(blob1);
+    log('✅ Test 1: Blob URL iframe with inline CSS created');
+
+    // ─── Test 2: Import map + data URI module + CSS ─────────
+    // Simulate a Vite-like HTML with import map pointing to data URI modules
+    const moduleCode = `
+document.getElementById('app').innerHTML = '<h2>Module loaded!</h2><p class="styled">This text should be blue on yellow.</p>';
+`;
+    const moduleBase64 = btoa(unescape(encodeURIComponent(moduleCode)));
+    const moduleDataURI = 'data:application/javascript;base64,' + moduleBase64;
+
+    const html2 = `<!DOCTYPE html>
+<html><head>
+<style>
+body { font-family: system-ui; margin: 0; padding: 1rem; background: #1a1a2e; color: #eee; }
+.styled { color: #00b4d8; background: #ffd60a; padding: 8px; border-radius: 4px; font-weight: bold; }
+</style>
+<script type="importmap">
+{ "imports": { "__diorama__/main.js": "${moduleDataURI}" } }
+</script>
+</head><body>
+<div id="app">Loading...</div>
+<script type="module">import '__diorama__/main.js';</script>
+</body></html>`;
+
+    const blob2 = new Blob([html2], { type: 'text/html' });
+    document.getElementById('test2').src = URL.createObjectURL(blob2);
+    log('✅ Test 2: Import map + data URI module + CSS created');
+
+    // ─── Test 3: Full Vite-style assembly ───────────────────
+    // This mimics what assembleESM produces for a real Vite project
+
+    const counterCode = `
+export function setupCounter(el) {
+  let count = 0;
+  el.addEventListener('click', () => { el.textContent = 'count: ' + (++count); });
+  el.textContent = 'count: 0';
+}
+`;
+    const counterBase64 = btoa(unescape(encodeURIComponent(counterCode)));
+    const counterDataURI = 'data:application/javascript;base64,' + counterBase64;
+
+    // Main module: CSS import has been STRIPPED (extracted to <style>)
+    // Asset import has been converted to const
+    // Relative import rewritten to bare specifier
+    const mainCode = `
+const logo = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgdmlld0JveD0iMCAwIDQwIDQwIj48Y2lyY2xlIGN4PSIyMCIgY3k9IjIwIiByPSIxOCIgZmlsbD0iIzY0NmNmZiIvPjx0ZXh0IHg9IjIwIiB5PSIyNiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0id2hpdGUiIGZvbnQtc2l6ZT0iMTgiPkQ8L3RleHQ+PC9zdmc+";
+import { setupCounter } from '__diorama__/src/counter.js';
+
+document.querySelector('#app').innerHTML = \`
+  <div id="center">
+    <img src="\${logo}" width="40" height="40" />
+    <h1>Vite CSS Test</h1>
+    <p class="desc">If you see styled content, CSS extraction works!</p>
+    <button id="counter" type="button"></button>
+  </div>
+\`;
+
+setupCounter(document.querySelector('#counter'));
+`;
+    const mainBase64 = btoa(unescape(encodeURIComponent(mainCode)));
+    const mainDataURI = 'data:application/javascript;base64,' + mainBase64;
+
+    // CSS that was extracted from `import './style.css'` in main.js
+    const extractedCSS = `/* src/style.css */
+:root {
+  --accent: #646cff;
+  --accent-hover: #535bf2;
+  --bg: #242424;
+  --text: rgba(255, 255, 255, 0.87);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  place-items: center;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+#app {
+  width: 100%;
+  max-width: 500px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+#center img { margin-bottom: 1rem; }
+
+#center h1 {
+  font-size: 2em;
+  line-height: 1.1;
+  margin: 0 0 .5rem;
+}
+
+.desc {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+button {
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  padding: 0.6em 1.2em;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  transition: border-color 0.25s;
+  margin-top: 1rem;
+}
+
+button:hover {
+  border-color: var(--accent-hover);
+}`;
+
+    const html3 = `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vite CSS Test</title>
+  <style>
+${extractedCSS}
+</style>
+  <script type="importmap">
+{
+  "imports": {
+    "__diorama__/src/main.js": "${mainDataURI}",
+    "__diorama__/src/counter.js": "${counterDataURI}"
+  }
+}
+</script>
+  <script>if(typeof globalThis.process==='undefined'){globalThis.process={env:{NODE_ENV:'production'}};}</script>
+</head>
+  <body>
+    <div id="app"></div>
+    <script type="module">import '__diorama__/src/main.js';</script>
+  </body>
+</html>`;
+
+    const blob3 = new Blob([html3], { type: 'text/html' });
+    document.getElementById('test3').src = URL.createObjectURL(blob3);
+    document.getElementById('html-output').textContent = html3;
+    log('✅ Test 3: Full Vite-style assembly created');
+    log('');
+    log('Look at the iframes above:');
+    log('  Test 1: Should show white text on teal background');
+    log('  Test 2: Should show blue text on yellow highlight, dark background');
+    log('  Test 3: Should show styled Vite page with dark bg, purple button');
+  </script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diorama — Basic Example</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      color: #1a202c;
+    }
+    h1 { margin-bottom: 0.5rem; }
+    p { color: #4a5568; margin-bottom: 2rem; }
+    #preview { border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
+  </style>
+</head>
+<body>
+  <h1>Diorama — Basic Example</h1>
+  <p>Rendering a vanilla HTML/CSS/JS project from GitHub:</p>
+
+  <div id="preview"></div>
+
+  <script type="module">
+    import { Diorama } from '../dist/index.js';
+
+    const diorama = new Diorama();
+
+    diorama.render(
+      '#preview',
+      'https://github.com/user/vanilla-counter',
+      {
+        height: '400px',
+        loading: 'eager',
+        onLoad: () => console.log('✅ Project loaded!'),
+        onError: (err) => console.error('❌ Error:', err.message),
+      }
+    );
+  </script>
+</body>
+</html>
