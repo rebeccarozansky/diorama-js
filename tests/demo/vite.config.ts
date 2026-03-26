@@ -3,6 +3,7 @@ import path from 'path';
 
 export default defineConfig({
   root: __dirname,
+  base: '/Diorama/',
   plugins: [],
   resolve: {
     alias: {
@@ -10,6 +11,8 @@ export default defineConfig({
     },
   },
   build: {
+    outDir: path.resolve(__dirname, '../../dist-demo'),
+    emptyOutDir: true,
     rollupOptions: {
       input: {
         main: path.resolve(__dirname, 'index.html'),
