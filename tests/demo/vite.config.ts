@@ -3,7 +3,7 @@ import path from 'path';
 
 export default defineConfig({
   root: __dirname,
-  base: '/Diorama/',
+  base: '/diorama-js/',
   plugins: [],
   resolve: {
     alias: {
