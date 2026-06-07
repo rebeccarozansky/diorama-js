@@ -217,6 +217,12 @@ function assembleESM(
     }
   }
 
+  // Guard the History API. The sandboxed iframe has an opaque (`null`) origin, so
+  // history.pushState/replaceState with a URL throw a SecurityError that would
+  // crash apps using URL/query state. This classic <head> script runs before the
+  // (deferred) app modules and no-ops those errors.
+  html = injectIntoHead(html, `<script>${HISTORY_GUARD_SCRIPT}</script>`);
+
   return { html, usesESM: true };
 }
 
@@ -715,9 +721,10 @@ function hasTailwindDirectives(css: string): boolean {
  *  1. Promote any `<style>` block containing `@tailwind`/`@apply` to
  *     `<style type="text/tailwindcss">` — the only kind of block the Play CDN
  *     compiles. Plain CSS `<style>` blocks are left untouched.
- *  2. Inject `<script src="https://cdn.tailwindcss.com">` into `<head>` (once),
- *     before the app's module scripts, optionally followed by an inlined
- *     `tailwind.config = {…}` parsed from a plain-object `tailwind.config.*`.
+ *  2. Inject Tailwind's Play CDN into `<head>` as a non-blocking (`defer`)
+ *     script so it never stalls the import map / module entry, optionally
+ *     preceded by an inlined `window.tailwind = { config: {…} }` parsed from a
+ *     plain-object `tailwind.config.*`.
  *
  * For non-Tailwind projects (or `tailwind: false`) the HTML is returned
  * byte-for-byte unchanged.
@@ -745,13 +752,19 @@ function applyTailwindRuntime(
         : match,
   );
 
-  // 2) Inject the Play CDN (and optional inlined config) into <head>. Injected
-  //    into <head>, it runs before the app's module scripts in <body>.
-  let injection = `<script src="${TAILWIND_CDN_URL}"></script>`;
+  // 2) Inject the Play CDN into <head>, but WITHOUT blocking parsing. A classic
+  //    blocking `<script src>` stalls HTML parsing and prevents the import map +
+  //    module entry from ever executing (the app never mounts). Set the config
+  //    on a global FIRST (so it's ready when the CDN initialises), then load the
+  //    CDN with `defer`. The Play CDN uses a MutationObserver, so it still
+  //    styles the app after it loads, and the deferred script never blocks the
+  //    module graph.
+  let injection = '';
   const configObject = extractTailwindConfig(project.files);
   if (configObject) {
-    injection += `\n<script>tailwind.config = ${configObject};</script>`;
+    injection += `<script>window.tailwind = { config: ${configObject} };</script>\n`;
   }
+  injection += `<script src="${TAILWIND_CDN_URL}" defer></script>`;
 
   return injectIntoHead(html, injection);
 }
@@ -834,6 +847,21 @@ function isSafeConfigObject(object: string): boolean {
     /\b__dirname\b|\b__filename\b/.test(object)
   );
 }
+
+// ─── History API guard ─────────────────────────────────────
+
+/**
+ * Inline script that makes `history.pushState`/`replaceState` safe inside the
+ * opaque-origin sandbox. With `sandbox="allow-scripts"` (and a blob/srcdoc
+ * document) the iframe origin is `null`, so calling these with a URL throws
+ * `SecurityError: … cannot be created in a document with origin 'null'`, which
+ * crashes apps that sync state to the URL (e.g. `?when=week`). The guard retries
+ * without the URL argument and otherwise no-ops, so the call never throws.
+ */
+export const HISTORY_GUARD_SCRIPT =
+  "try{for(const m of ['pushState','replaceState']){const orig=history[m].bind(history);" +
+  "history[m]=function(state,title,url){try{return orig(state,title,url);}catch(e){" +
+  "try{return orig(state,title);}catch(e2){}}};}}catch(e){}";
 
 // ─── import.meta.env injection ─────────────────────────────────
 

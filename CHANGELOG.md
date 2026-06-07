@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-06
+
+### Fixed
+- The injected Tailwind Play CDN no longer blocks rendering. It was added as a render-blocking classic `<script>` in `<head>`, which stalled HTML parsing so the import map and module entry never executed and the app stayed blank. The CDN is now loaded with `defer` (non-blocking) and its config is set on a `window.tailwind` global *before* the CDN initialises (instead of `tailwind.config = …` after it), so the import map / module graph always run and larger ESM projects mount and style correctly.
+- Apps that call the History API no longer crash in the sandbox. Because the sandboxed iframe has an opaque (`null`) origin, `history.pushState`/`replaceState` with a URL (e.g. syncing `?when=week`) threw `SecurityError`, aborting the app's render. A tiny guard is now injected into `<head>` before the app modules; it retries those calls without the URL argument and otherwise no-ops, so navigation-less state updates don't throw.
+
 ## [0.2.0] - 2026-06-06
 
 ### Added

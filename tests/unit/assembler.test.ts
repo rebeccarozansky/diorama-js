@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assembleHTML } from '../../src/transform/assembler';
+import { assembleHTML, HISTORY_GUARD_SCRIPT } from '../../src/transform/assembler';
 import { rewriteImports } from '../../src/transform/rewriter';
 import type { ResolvedProject, ProjectConfig } from '../../src/types';
 
@@ -456,19 +456,20 @@ describe('HTMLAssembler', () => {
     const config = staticConfig({ type: 'vite', isVite: true, hasJSX: true });
     const { html } = assembleHTML({ project: proj, config });
 
-    // Play CDN injected once.
-    expect(html).toContain('<script src="https://cdn.tailwindcss.com"></script>');
+    // Play CDN injected once, and deferred so it never blocks parsing.
+    expect(html).toContain('<script src="https://cdn.tailwindcss.com" defer></script>');
     expect(html.match(/cdn\.tailwindcss\.com/g)).toHaveLength(1);
 
     // Directive CSS promoted to text/tailwindcss so the CDN compiles it.
     expect(html).toContain('<style type="text/tailwindcss">');
     expect(html).toContain('@tailwind base;');
 
-    // Plain-object config inlined after the CDN script.
-    expect(html).toContain('tailwind.config = {');
+    // Plain-object config set on a global BEFORE the CDN script, so it's ready
+    // when the (deferred) CDN initialises.
+    expect(html).toContain('window.tailwind = { config: {');
     expect(html).toContain("ink: '#1a1a1a'");
-    expect(html.indexOf('cdn.tailwindcss.com')).toBeLessThan(
-      html.indexOf('tailwind.config ='),
+    expect(html.indexOf('window.tailwind = { config:')).toBeLessThan(
+      html.indexOf('cdn.tailwindcss.com'),
     );
   });
 
@@ -481,11 +482,11 @@ describe('HTMLAssembler', () => {
     const config = staticConfig({ type: 'vite', isVite: true, hasJSX: true });
     const { html } = assembleHTML({ project: proj, config });
 
-    expect(html).toContain('<script src="https://cdn.tailwindcss.com"></script>');
+    expect(html).toContain('<script src="https://cdn.tailwindcss.com" defer></script>');
     expect(html).toContain('<style type="text/tailwindcss">');
     expect(html).toContain('@apply px-4 py-2 rounded');
     // No config file → no inlined config.
-    expect(html).not.toContain('tailwind.config =');
+    expect(html).not.toContain('window.tailwind');
   });
 
   it('does not inject Tailwind for non-Tailwind projects', () => {
@@ -527,7 +528,7 @@ describe('HTMLAssembler', () => {
     const { html, usesESM } = assembleHTML({ project: proj, config, tailwind: true });
 
     expect(usesESM).toBe(false);
-    expect(html).toContain('<script src="https://cdn.tailwindcss.com"></script>');
+    expect(html).toContain('<script src="https://cdn.tailwindcss.com" defer></script>');
   });
 
   it('wraps Tailwind directive CSS inlined from a <link> in static projects', () => {
@@ -539,7 +540,7 @@ describe('HTMLAssembler', () => {
     const config = staticConfig({ type: 'static' });
     const { html } = assembleHTML({ project: proj, config });
 
-    expect(html).toContain('<script src="https://cdn.tailwindcss.com"></script>');
+    expect(html).toContain('<script src="https://cdn.tailwindcss.com" defer></script>');
     expect(html).toContain('<style type="text/tailwindcss">');
     expect(html).not.toContain('href="styles.css"');
   });
@@ -558,8 +559,62 @@ describe('HTMLAssembler', () => {
     const { html } = assembleHTML({ project: proj, config });
 
     // Detection still succeeds, so the CDN is injected…
-    expect(html).toContain('<script src="https://cdn.tailwindcss.com"></script>');
+    expect(html).toContain('<script src="https://cdn.tailwindcss.com" defer></script>');
     // …but the unsafe config is NOT inlined.
-    expect(html).not.toContain('tailwind.config =');
+    expect(html).not.toContain('window.tailwind');
+  });
+
+  // ── Tailwind CDN non-blocking (Bug A) + History API guard (Bug B) ──
+
+  it('loads the Tailwind CDN deferred so it never blocks the import map or module entry', () => {
+    const proj = project({
+      'index.html':
+        '<html><head></head><body><div id="root"></div><script type="module" src="/src/main.jsx"></script></body></html>',
+      'src/main.jsx': "import './index.css';\nconsole.log('app');",
+      'src/index.css': '@tailwind utilities;',
+    });
+    const config = staticConfig({ type: 'vite', isVite: true, hasJSX: true });
+    const { html } = assembleHTML({ project: proj, config });
+
+    // CDN must be deferred — a blocking classic script stalls the module graph
+    // and leaves the app blank.
+    expect(html).toMatch(/<script src="https:\/\/cdn\.tailwindcss\.com" defer><\/script>/);
+    // The import map and module entry are still present and parse regardless.
+    expect(html).toContain('type="importmap"');
+    expect(html).toContain("import '__diorama__/src/main.jsx'");
+  });
+
+  it('injects a History API guard before the app module entry', () => {
+    const proj = project({
+      'index.html':
+        '<html><head></head><body><script type="module" src="/src/main.jsx"></script></body></html>',
+      'src/main.jsx': "history.replaceState('s', '', '?x=1');",
+    });
+    const config = staticConfig({ type: 'vite', isVite: true, hasJSX: true });
+    const { html } = assembleHTML({ project: proj, config });
+
+    // Guard present and placed before the (deferred) module entry, so it patches
+    // history before app code runs.
+    expect(html).toContain("['pushState','replaceState']");
+    expect(html.indexOf('pushState')).toBeLessThan(html.indexOf("import '__diorama__"));
+  });
+
+  it('the History API guard no-ops SecurityErrors thrown at an opaque origin', () => {
+    // Mock a history whose URL-bearing calls throw (as they do at origin 'null').
+    const mockHistory = {
+      pushState(_s: unknown, _t: unknown, url?: unknown) {
+        if (url != null) throw new Error("SecurityError: origin 'null'");
+      },
+      replaceState(_s: unknown, _t: unknown, url?: unknown) {
+        if (url != null) throw new Error("SecurityError: origin 'null'");
+      },
+    };
+    // Apply the guard to the mock, then exercise it.
+    new Function('history', HISTORY_GUARD_SCRIPT)(mockHistory);
+
+    expect(() => mockHistory.replaceState('state', '', '?x=1')).not.toThrow();
+    expect(() => mockHistory.pushState({}, '', '?y=2')).not.toThrow();
+    // A call without a URL still works (nothing to swallow).
+    expect(() => mockHistory.replaceState('state', '')).not.toThrow();
   });
 });
