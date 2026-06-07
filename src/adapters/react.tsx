@@ -35,6 +35,11 @@ export interface DioramaProps
   frame?: FrameStyle;
   /** Allow click-to-expand to fill viewport. Default: `false`. */
   expand?: boolean;
+  /**
+   * Tailwind CSS handling. `'auto'` (default) loads Tailwind's Play CDN when the
+   * project uses Tailwind; `true` forces it on; `false` disables it.
+   */
+  tailwind?: 'auto' | boolean;
   /** Called when rendering completes. */
   onLoad?: () => void;
   /** Called on error. */
@@ -76,6 +81,7 @@ export const DioramaPreview = forwardRef<HTMLDivElement, DioramaProps>(
       height = '500px',
       frame,
       expand,
+      tailwind,
       onLoad,
       onError,
       options,
@@ -111,6 +117,7 @@ export const DioramaPreview = forwardRef<HTMLDivElement, DioramaProps>(
           height,
           frame,
           expand,
+          tailwind,
           onLoad,
           onError: (err) => {
             onError?.(err);
@@ -134,7 +141,7 @@ export const DioramaPreview = forwardRef<HTMLDivElement, DioramaProps>(
         instanceRef.current?.destroy();
         instanceRef.current = null;
       };
-    }, [repo, branch, subdirectory, loading, placeholder, height, frame, expand]);
+    }, [repo, branch, subdirectory, loading, placeholder, height, frame, expand, tailwind]);
 
     const containerStyle: CSSProperties = {
       width: '100%',

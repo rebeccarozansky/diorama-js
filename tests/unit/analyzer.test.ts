@@ -245,4 +245,46 @@ describe('ProjectAnalyzer', () => {
     );
     expect(config.jsEntryPoint).toBe('src/main.tsx');
   });
+
+  // ── Tailwind detection ───────────────────────────
+
+  it('detects Tailwind via @tailwind directives in CSS', () => {
+    const config = analyzeProject(
+      project({
+        'index.html': '<html></html>',
+        'src/index.css': '@tailwind base;\n@tailwind utilities;',
+      }),
+    );
+    expect(config.usesTailwind).toBe(true);
+  });
+
+  it('detects Tailwind via @apply in CSS', () => {
+    const config = analyzeProject(
+      project({
+        'index.html': '<html></html>',
+        'styles.css': '.btn { @apply px-4 py-2; }',
+      }),
+    );
+    expect(config.usesTailwind).toBe(true);
+  });
+
+  it('detects Tailwind via a tailwind.config file', () => {
+    const config = analyzeProject(
+      project({
+        'index.html': '<html></html>',
+        'tailwind.config.ts': 'export default { theme: {} };',
+      }),
+    );
+    expect(config.usesTailwind).toBe(true);
+  });
+
+  it('reports no Tailwind for plain-CSS projects', () => {
+    const config = analyzeProject(
+      project({
+        'index.html': '<html></html>',
+        'style.css': 'body { color: red; }',
+      }),
+    );
+    expect(config.usesTailwind).toBe(false);
+  });
 });

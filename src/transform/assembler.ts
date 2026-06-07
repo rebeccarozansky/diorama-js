@@ -2,6 +2,7 @@ import type { CDNProviderName, ProjectConfig, ResolvedProject } from '../types';
 import { AssemblyError } from '../errors';
 import { processEnvShim } from './transpiler';
 import { buildCSSURL } from './rewriter';
+import { usesTailwindCSS } from '../core/analyzer';
 
 // ─── Constants ─────────────────────────────────────────────────
 
@@ -53,6 +54,11 @@ export interface AssembleOptions {
   transformedFiles?: Map<string, string>;
   /** CDN used to resolve package CSS imports. Default: `'esm.sh'`. */
   cdnProvider?: CDNProviderName;
+  /**
+   * Tailwind CSS handling. `'auto'` (default) injects Tailwind's Play CDN when
+   * the project is detected to use Tailwind; `true` forces it; `false` disables.
+   */
+  tailwind?: 'auto' | boolean;
 }
 
 export interface AssembleResult {
@@ -66,21 +72,29 @@ export interface AssembleResult {
  * Build the final HTML document to be injected into the sandbox.
  */
 export function assembleHTML(options: AssembleOptions): AssembleResult {
-  const { project, config, transformedFiles, cdnProvider } = options;
+  const { project, config, transformedFiles, cdnProvider, tailwind = 'auto' } = options;
   const files = transformedFiles ?? project.files;
 
+  let result: AssembleResult;
   switch (config.type) {
     case 'static':
-      return assembleStatic(files, project, config);
+      result = assembleStatic(files, project, config);
+      break;
     case 'static-esm':
     case 'jsx':
     case 'typescript':
     case 'jsx-typescript':
     case 'vite':
-      return assembleESM(files, project, config, cdnProvider);
+      result = assembleESM(files, project, config, cdnProvider);
+      break;
     default:
       throw new AssemblyError(`Unsupported project type: ${config.type}`);
   }
+
+  // Wire up Tailwind's Play CDN when the project uses Tailwind. This is a strict
+  // no-op (HTML returned unchanged) for non-Tailwind projects or `tailwind:false`.
+  result.html = applyTailwindRuntime(result.html, project, config, tailwind);
+  return result;
 }
 
 // ─── Static assembly (Tier 1) ──────────────────────────────────
@@ -680,6 +694,145 @@ function extractCSSImports(
   }
 
   return { css: cssChunks.join('\n\n'), links };
+}
+
+// ─── Tailwind CSS runtime support ─────────────────────────────
+
+/** Tailwind build-time directives that require compilation. */
+const TAILWIND_DIRECTIVE_RE = /@tailwind\b|@apply\b/;
+
+/** Tailwind Play CDN — compiles utilities at runtime in the browser. */
+const TAILWIND_CDN_URL = 'https://cdn.tailwindcss.com';
+
+function hasTailwindDirectives(css: string): boolean {
+  return TAILWIND_DIRECTIVE_RE.test(css);
+}
+
+/**
+ * Wire up Tailwind's Play CDN so a Tailwind-based project renders styled in the
+ * sandbox, instead of blank:
+ *
+ *  1. Promote any `<style>` block containing `@tailwind`/`@apply` to
+ *     `<style type="text/tailwindcss">` — the only kind of block the Play CDN
+ *     compiles. Plain CSS `<style>` blocks are left untouched.
+ *  2. Inject `<script src="https://cdn.tailwindcss.com">` into `<head>` (once),
+ *     before the app's module scripts, optionally followed by an inlined
+ *     `tailwind.config = {…}` parsed from a plain-object `tailwind.config.*`.
+ *
+ * For non-Tailwind projects (or `tailwind: false`) the HTML is returned
+ * byte-for-byte unchanged.
+ */
+function applyTailwindRuntime(
+  html: string,
+  project: ResolvedProject,
+  config: ProjectConfig,
+  tailwind: 'auto' | boolean,
+): string {
+  const enabled =
+    tailwind === true ||
+    (tailwind === 'auto' &&
+      (config.usesTailwind ?? usesTailwindCSS(project.files)));
+
+  if (!enabled) return html;
+
+  // 1) Promote directive-bearing <style> blocks to text/tailwindcss so the Play
+  //    CDN compiles them. Plain <style> blocks are left as-is.
+  html = html.replace(
+    /<style>([\s\S]*?)<\/style>/g,
+    (match, css: string) =>
+      hasTailwindDirectives(css)
+        ? `<style type="text/tailwindcss">${css}</style>`
+        : match,
+  );
+
+  // 2) Inject the Play CDN (and optional inlined config) into <head>. Injected
+  //    into <head>, it runs before the app's module scripts in <body>.
+  let injection = `<script src="${TAILWIND_CDN_URL}"></script>`;
+  const configObject = extractTailwindConfig(project.files);
+  if (configObject) {
+    injection += `\n<script>tailwind.config = ${configObject};</script>`;
+  }
+
+  return injectIntoHead(html, injection);
+}
+
+/**
+ * Extract a Tailwind config object literal from a `tailwind.config.*` file, but
+ * only when it's a plain object that's safe to inline as JS (no imports,
+ * requires, function calls, plugins, or template literals). Returns the object
+ * source (e.g. `{ theme: { … } }`) or `null` to fall back to Tailwind defaults.
+ */
+function extractTailwindConfig(files: Map<string, string>): string | null {
+  let source: string | undefined;
+  for (const [path, content] of files) {
+    if (/(?:^|\/)tailwind\.config\.(?:js|cjs|mjs|ts)$/.test(path)) {
+      source = content;
+      break;
+    }
+  }
+  if (!source) return null;
+
+  const object = extractBalancedObject(source);
+  if (!object || !isSafeConfigObject(object)) return null;
+  return object;
+}
+
+/**
+ * Extract the first `export default { … }` / `module.exports = { … }` object
+ * literal as balanced source text, skipping strings and comments so braces
+ * inside string globs (e.g. `'./src/**\/*.{js,ts}'`) don't break matching.
+ * Returns `null` if no such object can be found.
+ */
+function extractBalancedObject(source: string): string | null {
+  const opener = source.match(/(?:export\s+default|module\.exports\s*=)\s*\{/);
+  if (!opener || opener.index === undefined) return null;
+
+  const start = opener.index + opener[0].length - 1; // position of '{'
+  let depth = 0;
+  let str: string | null = null;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let i = start; i < source.length; i++) {
+    const c = source[i];
+    const n = source[i + 1];
+
+    if (lineComment) {
+      if (c === '\n') lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (c === '*' && n === '/') { blockComment = false; i++; }
+      continue;
+    }
+    if (str) {
+      if (c === '\\') { i++; continue; }
+      if (c === str) str = null;
+      continue;
+    }
+    if (c === '/' && n === '/') { lineComment = true; i++; continue; }
+    if (c === '/' && n === '*') { blockComment = true; i++; continue; }
+    if (c === '"' || c === "'" || c === '`') { str = c; continue; }
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/** Reject configs that reference runtime/dynamic constructs we can't inline. */
+function isSafeConfigObject(object: string): boolean {
+  return !(
+    /\brequire\s*\(/.test(object) ||
+    /\bimport\b/.test(object) ||
+    /=>/.test(object) ||
+    /\bfunction\b/.test(object) ||
+    /`/.test(object) ||
+    /\bprocess\b/.test(object) ||
+    /\b__dirname\b|\b__filename\b/.test(object)
+  );
 }
 
 // ─── import.meta.env injection ─────────────────────────────────

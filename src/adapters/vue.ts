@@ -55,6 +55,7 @@ const dioramaProps = {
   height: { type: String, default: '500px' },
   frame: { type: String as PropType<FrameStyle>, default: 'none' as const },
   expand: { type: Boolean, default: false },
+  tailwind: { type: [String, Boolean] as PropType<'auto' | boolean>, default: 'auto' as const },
   options: { type: Object as PropType<DioramaOptions>, default: undefined },
 };
 
@@ -90,6 +91,7 @@ export const DioramaPreview = defineComponent({
           height: props.height,
           frame: props.frame,
           expand: props.expand,
+          tailwind: props.tailwind,
           onLoad: () => emit('load'),
           onError: (err: DioramaError) => emit('error', err),
         });
@@ -109,7 +111,7 @@ export const DioramaPreview = defineComponent({
 
     // Re-render on prop changes
     watch(
-      () => [props.repo, props.branch, props.subdirectory, props.loading, props.height, props.frame, props.expand],
+      () => [props.repo, props.branch, props.subdirectory, props.loading, props.height, props.frame, props.expand, props.tailwind],
       () => {
         renderProject();
       },

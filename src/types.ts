@@ -41,6 +41,8 @@ export interface ProjectConfig {
   jsEntryPoint?: string;
   /** Whether the project uses Vite as its build tool. */
   isVite: boolean;
+  /** Whether the project relies on Tailwind CSS (directives or a config file). */
+  usesTailwind?: boolean;
 }
 
 // ─── CDN provider ──────────────────────────────────────────────
@@ -127,6 +129,11 @@ export interface RenderOptions {
   projectType?: ProjectType;
   /** Override entry point detection. */
   entryPoint?: string;
+  /**
+   * Tailwind CSS handling. `'auto'` (default) loads Tailwind's Play CDN when the
+   * project is detected to use Tailwind; `true` forces it on; `false` disables it.
+   */
+  tailwind?: 'auto' | boolean;
   /** Glob patterns of files to include. */
   include?: string[];
   /** Glob patterns of files to exclude. */

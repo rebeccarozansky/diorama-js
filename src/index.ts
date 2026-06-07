@@ -144,6 +144,7 @@ export class Diorama {
         config,
         transformedFiles: files,
         cdnProvider: this.options.cdnProvider,
+        tailwind: options.tailwind ?? 'auto',
       });
 
       return { html, usesESM, repoName };

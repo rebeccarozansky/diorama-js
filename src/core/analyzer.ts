@@ -173,6 +173,9 @@ export function analyzeProject(
     isVite,
   });
 
+  // ─── Detect Tailwind CSS usage ───────────────────────────
+  const usesTailwind = usesTailwindCSS(files);
+
   return {
     type,
     entryPoint: htmlEntry,
@@ -182,6 +185,7 @@ export function analyzeProject(
     hasTypeScript,
     jsEntryPoint: jsEntry,
     isVite,
+    usesTailwind,
   };
 }
 
@@ -218,6 +222,23 @@ function hasBareImports(files: Map<string, string>): boolean {
       if (BARE_IMPORT_RE.test(content)) {
         return true;
       }
+    }
+  }
+  return false;
+}
+
+/**
+ * Detect whether a project relies on Tailwind CSS — either because a CSS file
+ * uses Tailwind directives (`@tailwind` / `@apply`) or because a
+ * `tailwind.config.*` file is present.
+ */
+export function usesTailwindCSS(files: Map<string, string>): boolean {
+  for (const [path, content] of files) {
+    if (/(?:^|\/)tailwind\.config\.(?:js|cjs|mjs|ts)$/.test(path)) {
+      return true;
+    }
+    if (path.endsWith('.css') && /@tailwind\b|@apply\b/.test(content)) {
+      return true;
     }
   }
   return false;

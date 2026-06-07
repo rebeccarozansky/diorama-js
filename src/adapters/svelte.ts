@@ -49,6 +49,11 @@ export interface DioramaActionOptions {
   frame?: FrameStyle;
   /** Allow click-to-expand to fill viewport. Default: `false`. */
   expand?: boolean;
+  /**
+   * Tailwind CSS handling. `'auto'` (default) loads Tailwind's Play CDN when the
+   * project uses Tailwind; `true` forces it on; `false` disables it.
+   */
+  tailwind?: 'auto' | boolean;
   onLoad?: () => void;
   onError?: (error: DioramaError) => void;
   options?: DioramaOptions;
@@ -84,6 +89,7 @@ export function dioramaAction(
         height: opts.height ?? '500px',
         frame: opts.frame,
         expand: opts.expand,
+        tailwind: opts.tailwind,
         onLoad: opts.onLoad,
         onError: opts.onError,
       });

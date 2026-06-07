@@ -431,4 +431,135 @@ describe('HTMLAssembler', () => {
       "import styles from './app.module.css'",
     );
   });
+
+  // ── Tailwind CSS support ──────────────────────
+
+  it('injects the Tailwind Play CDN, wraps directive CSS, and inlines a plain config', () => {
+    const proj = project({
+      'index.html':
+        '<html><head></head><body><div id="root"></div><script type="module" src="/src/main.jsx"></script></body></html>',
+      'src/main.jsx': "import './index.css';\nconsole.log('app');",
+      'src/index.css':
+        '@tailwind base;\n@tailwind components;\n@tailwind utilities;\n.brand { color: var(--ink); }',
+      'tailwind.config.js': [
+        'export default {',
+        '  content: ["./index.html", "./src/**/*.{js,jsx}"],',
+        '  theme: {',
+        '    extend: {',
+        "      colors: { ink: '#1a1a1a' },",
+        "      fontFamily: { sans: ['Inter', 'sans-serif'] },",
+        '    },',
+        '  },',
+        '};',
+      ].join('\n'),
+    });
+    const config = staticConfig({ type: 'vite', isVite: true, hasJSX: true });
+    const { html } = assembleHTML({ project: proj, config });
+
+    // Play CDN injected once.
+    expect(html).toContain('<script src="https://cdn.tailwindcss.com"></script>');
+    expect(html.match(/cdn\.tailwindcss\.com/g)).toHaveLength(1);
+
+    // Directive CSS promoted to text/tailwindcss so the CDN compiles it.
+    expect(html).toContain('<style type="text/tailwindcss">');
+    expect(html).toContain('@tailwind base;');
+
+    // Plain-object config inlined after the CDN script.
+    expect(html).toContain('tailwind.config = {');
+    expect(html).toContain("ink: '#1a1a1a'");
+    expect(html.indexOf('cdn.tailwindcss.com')).toBeLessThan(
+      html.indexOf('tailwind.config ='),
+    );
+  });
+
+  it('detects @apply-only CSS and wraps it as text/tailwindcss', () => {
+    const proj = project({
+      'index.html': '<html><head></head><body></body></html>',
+      'src/main.jsx': "import './styles.css';",
+      'src/styles.css': '.btn { @apply px-4 py-2 rounded; }',
+    });
+    const config = staticConfig({ type: 'vite', isVite: true, hasJSX: true });
+    const { html } = assembleHTML({ project: proj, config });
+
+    expect(html).toContain('<script src="https://cdn.tailwindcss.com"></script>');
+    expect(html).toContain('<style type="text/tailwindcss">');
+    expect(html).toContain('@apply px-4 py-2 rounded');
+    // No config file → no inlined config.
+    expect(html).not.toContain('tailwind.config =');
+  });
+
+  it('does not inject Tailwind for non-Tailwind projects', () => {
+    const proj = project({
+      'index.html': '<html><head></head><body><div id="root"></div></body></html>',
+      'src/main.jsx': "import './index.css';\nconsole.log('app');",
+      'src/index.css': '#root { color: green; }',
+    });
+    const config = staticConfig({ type: 'vite', isVite: true, hasJSX: true });
+    const { html } = assembleHTML({ project: proj, config });
+
+    expect(html).not.toContain('tailwindcss');
+    // Plain CSS is still inlined as a normal <style>.
+    expect(html).toContain('<style>');
+    expect(html).toContain('#root { color: green; }');
+  });
+
+  it('respects tailwind: false even when directives are present', () => {
+    const proj = project({
+      'index.html': '<html><head></head><body></body></html>',
+      'src/main.jsx': "import './index.css';",
+      'src/index.css': '@tailwind base;\n@tailwind utilities;',
+    });
+    const config = staticConfig({ type: 'vite', isVite: true, hasJSX: true });
+    const { html } = assembleHTML({ project: proj, config, tailwind: false });
+
+    expect(html).not.toContain('cdn.tailwindcss.com');
+    expect(html).not.toContain('text/tailwindcss');
+    // CSS is still present (just not compiled), inlined as a normal <style>.
+    expect(html).toContain('@tailwind base;');
+    expect(html).toContain('<style>');
+  });
+
+  it('forces Tailwind injection with tailwind: true (static path, no detection)', () => {
+    const proj = project({
+      'index.html': '<html><head></head><body><div class="flex h-full"></div></body></html>',
+    });
+    const config = staticConfig({ type: 'static' });
+    const { html, usesESM } = assembleHTML({ project: proj, config, tailwind: true });
+
+    expect(usesESM).toBe(false);
+    expect(html).toContain('<script src="https://cdn.tailwindcss.com"></script>');
+  });
+
+  it('wraps Tailwind directive CSS inlined from a <link> in static projects', () => {
+    const proj = project({
+      'index.html':
+        '<html><head><link rel="stylesheet" href="styles.css"></head><body class="p-4"></body></html>',
+      'styles.css': '@tailwind base;\n@tailwind utilities;',
+    });
+    const config = staticConfig({ type: 'static' });
+    const { html } = assembleHTML({ project: proj, config });
+
+    expect(html).toContain('<script src="https://cdn.tailwindcss.com"></script>');
+    expect(html).toContain('<style type="text/tailwindcss">');
+    expect(html).not.toContain('href="styles.css"');
+  });
+
+  it('skips config inlining for non-plain (require/function) Tailwind configs', () => {
+    const proj = project({
+      'index.html': '<html><head></head><body></body></html>',
+      'src/main.jsx': "import './index.css';",
+      'src/index.css': '@tailwind utilities;',
+      'tailwind.config.js': [
+        "const plugin = require('tailwindcss/plugin');",
+        'export default { plugins: [plugin(function () {})] };',
+      ].join('\n'),
+    });
+    const config = staticConfig({ type: 'vite', isVite: true, hasJSX: true });
+    const { html } = assembleHTML({ project: proj, config });
+
+    // Detection still succeeds, so the CDN is injected…
+    expect(html).toContain('<script src="https://cdn.tailwindcss.com"></script>');
+    // …but the unsafe config is NOT inlined.
+    expect(html).not.toContain('tailwind.config =');
+  });
 });
