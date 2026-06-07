@@ -1,6 +1,7 @@
-import type { ProjectConfig, ResolvedProject } from '../types';
+import type { CDNProviderName, ProjectConfig, ResolvedProject } from '../types';
 import { AssemblyError } from '../errors';
 import { processEnvShim } from './transpiler';
+import { buildCSSURL } from './rewriter';
 
 // ─── Constants ─────────────────────────────────────────────────
 
@@ -50,6 +51,8 @@ export interface AssembleOptions {
    * Falls back to `project.files` if not provided.
    */
   transformedFiles?: Map<string, string>;
+  /** CDN used to resolve package CSS imports. Default: `'esm.sh'`. */
+  cdnProvider?: CDNProviderName;
 }
 
 export interface AssembleResult {
@@ -63,7 +66,7 @@ export interface AssembleResult {
  * Build the final HTML document to be injected into the sandbox.
  */
 export function assembleHTML(options: AssembleOptions): AssembleResult {
-  const { project, config, transformedFiles } = options;
+  const { project, config, transformedFiles, cdnProvider } = options;
   const files = transformedFiles ?? project.files;
 
   switch (config.type) {
@@ -74,7 +77,7 @@ export function assembleHTML(options: AssembleOptions): AssembleResult {
     case 'typescript':
     case 'jsx-typescript':
     case 'vite':
-      return assembleESM(files, project, config);
+      return assembleESM(files, project, config, cdnProvider);
     default:
       throw new AssemblyError(`Unsupported project type: ${config.type}`);
   }
@@ -112,6 +115,7 @@ function assembleESM(
   files: Map<string, string>,
   project: ResolvedProject,
   config: ProjectConfig,
+  cdnProvider?: CDNProviderName,
 ): AssembleResult {
   const isGenerated = config.entryPoint === '__generated__/index.html';
 
@@ -119,8 +123,13 @@ function assembleESM(
   // Rewrite asset imports (import logo from './assets/logo.svg') → inline data URLs
   rewriteAssetImports(files, project);
 
-  // Collect all CSS imports from JS/TS files and inject as <style>
-  const cssFromJS = extractCSSImports(files);
+  // Collect all CSS imports from JS/TS files. Local CSS is inlined as a
+  // <style>; package CSS (e.g. 'leaflet/dist/leaflet.css') is loaded from
+  // the CDN as a real stylesheet via <link>.
+  const { css: cssFromJS, links: cssLinks } = extractCSSImports(files, {
+    dependencies: config.dependencies,
+    cdnProvider,
+  });
 
   // Inject import.meta.env shim into each JS module for Vite projects.
   // This must happen per-module because `import.meta` is scoped to
@@ -155,7 +164,14 @@ function assembleESM(
     html = inlineAssets(html, project, config.entryPoint);
   }
 
-  // Inject collected CSS from JS imports
+  // Inject package CSS (from JS imports) as stylesheet links first, so that
+  // local CSS injected afterwards can override package defaults — matching
+  // the usual `import 'pkg/x.css'; import './local.css';` ordering.
+  for (const href of cssLinks) {
+    html = injectIntoHead(html, `<link rel="stylesheet" href="${href}">`);
+  }
+
+  // Inject collected local CSS from JS imports
   if (cssFromJS) {
     html = injectIntoHead(html, `<style>\n${cssFromJS}\n</style>`);
   }
@@ -593,29 +609,68 @@ function rewriteAssetImports(
 
 // ─── CSS-in-JS imports ─────────────────────────────────────────
 
+interface ExtractedCSS {
+  /** Combined local CSS to inline in a `<style>` block. */
+  css: string;
+  /** Stylesheet URLs (package / absolute CSS) to add as `<link rel="stylesheet">`. */
+  links: string[];
+}
+
 /**
- * Extract CSS imported from JS files (`import './styles.css'`)
- * and return the combined CSS content. Also strips the import
- * statement from the JS source (mutates the map).
+ * Extract side-effect CSS imports from JS/TS files and strip them from the
+ * source (mutates the map), so the browser never tries to load CSS as a
+ * module script.
+ *
+ * - Local CSS (`./styles.css`, `/styles.css`) is resolved against the
+ *   project files and returned as inline CSS.
+ * - Package CSS (`leaflet/dist/leaflet.css`) is returned as a CDN stylesheet
+ *   URL, to be loaded via `<link rel="stylesheet">`.
+ * - Absolute-URL CSS (`https://…/x.css`) is returned as-is for a `<link>`.
+ *
+ * Only side-effect imports are handled. `import styles from './x.module.css'`
+ * (CSS Modules, which have a binding) are intentionally left untouched.
  */
-function extractCSSImports(files: Map<string, string>): string {
+function extractCSSImports(
+  files: Map<string, string>,
+  options: { dependencies?: Record<string, string>; cdnProvider?: CDNProviderName } = {},
+): ExtractedCSS {
   const cssChunks: string[] = [];
-  const cssImportRe = /import\s+['"]([^'"]+\.css)['"]\s*;?/g;
+  const links: string[] = [];
+  const seenLinks = new Set<string>();
+  // Match `import '….css'` side-effect imports, allowing an optional
+  // ?query / #hash suffix (which can survive earlier transforms).
+  const cssImportRe = /import\s+['"]([^'"]+\.css(?:[?#][^'"]*)?)['"]\s*;?/g;
 
   for (const [path, content] of files) {
     if (!/\.(js|ts|jsx|tsx|mjs)$/.test(path)) continue;
 
     let modified = content;
     let match: RegExpExecArray | null;
+    cssImportRe.lastIndex = 0;
 
     while ((match = cssImportRe.exec(content)) !== null) {
-      const cssPath = match[1];
-      const resolved = resolvePath(directoryOf(path), cssPath);
-      const css = files.get(resolved);
-      if (css) {
-        cssChunks.push(`/* ${resolved} */\n${css}`);
+      const specifier = match[1];
+      const bare = specifier.replace(/[?#].*$/, '');
+
+      if (bare.startsWith('.') || bare.startsWith('/')) {
+        // Local CSS → inline as <style>.
+        const resolved = resolvePath(directoryOf(path), bare);
+        const css = files.get(resolved);
+        if (css) {
+          cssChunks.push(`/* ${resolved} */\n${css}`);
+        }
+      } else {
+        // Package or absolute-URL CSS → load as a real stylesheet.
+        const href = /^https?:\/\//.test(bare)
+          ? bare
+          : buildCSSURL(bare, options);
+        if (!seenLinks.has(href)) {
+          seenLinks.add(href);
+          links.push(href);
+        }
       }
-      // Strip the import from the JS
+
+      // Always strip the import so CSS is never loaded as a module script.
       modified = modified.replace(match[0], '');
     }
 
@@ -624,7 +679,7 @@ function extractCSSImports(files: Map<string, string>): string {
     }
   }
 
-  return cssChunks.join('\n\n');
+  return { css: cssChunks.join('\n\n'), links };
 }
 
 // ─── import.meta.env injection ─────────────────────────────────

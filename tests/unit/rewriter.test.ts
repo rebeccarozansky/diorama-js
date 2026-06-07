@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { rewriteImports } from '../../src/transform/rewriter';
+import { rewriteImports, buildCSSURL } from '../../src/transform/rewriter';
 import { NodeBuiltinError } from '../../src/errors';
 
 describe('ImportRewriter', () => {
@@ -77,6 +77,34 @@ describe('ImportRewriter', () => {
 
   it('leaves parent-relative imports alone', () => {
     const input = `import { baz } from '../shared/utils.js';`;
+    const output = rewriteImports(input, { dependencies: deps });
+    expect(output).toBe(input);
+  });
+
+  // ── CSS imports (handled by the assembler, never as JS) ─
+
+  it('leaves side-effect package CSS imports untouched', () => {
+    const input = `import 'leaflet/dist/leaflet.css';`;
+    const output = rewriteImports(input, { dependencies: { leaflet: '1.9.4' } });
+    expect(output).toBe(input);
+  });
+
+  it('does NOT add a ?deps hint to package CSS imports for React projects', () => {
+    // This is the exact case that produced a blank render: a side-effect CSS
+    // import being rewritten to an esm.sh JS-module URL with a ?deps query.
+    const input = `import 'leaflet/dist/leaflet.css';`;
+    const output = rewriteImports(input, {
+      dependencies: { leaflet: '1.9.4', react: '18.3.1', 'react-dom': '18.3.1' },
+      framework: 'react',
+      reactVersion: '18.3.1',
+    });
+    expect(output).toBe(input);
+    expect(output).not.toContain('esm.sh');
+    expect(output).not.toContain('?deps');
+  });
+
+  it('leaves local CSS imports alone', () => {
+    const input = `import './index.css';`;
     const output = rewriteImports(input, { dependencies: deps });
     expect(output).toBe(input);
   });
@@ -192,5 +220,49 @@ describe('ImportRewriter', () => {
     const input = `const mode = import.meta.env.MODE;`;
     const output = rewriteImports(input, { isVite: false });
     expect(output).toContain('import.meta.env.MODE');
+  });
+});
+
+describe('buildCSSURL', () => {
+  it('builds an esm.sh URL with the version pinned from dependencies', () => {
+    const url = buildCSSURL('leaflet/dist/leaflet.css', {
+      dependencies: { leaflet: '1.9.4' },
+    });
+    expect(url).toBe('https://esm.sh/leaflet@1.9.4/dist/leaflet.css');
+  });
+
+  it('omits the version when the package is not in dependencies', () => {
+    const url = buildCSSURL('leaflet.markercluster/dist/MarkerCluster.css');
+    expect(url).toBe('https://esm.sh/leaflet.markercluster/dist/MarkerCluster.css');
+  });
+
+  it('builds a raw unpkg URL without the ?module suffix', () => {
+    const url = buildCSSURL('leaflet/dist/leaflet.css', {
+      dependencies: { leaflet: '1.9.4' },
+      cdnProvider: 'unpkg',
+    });
+    expect(url).toBe('https://unpkg.com/leaflet@1.9.4/dist/leaflet.css');
+  });
+
+  it('falls back to esm.sh for skypack (which does not serve raw CSS)', () => {
+    const url = buildCSSURL('leaflet/dist/leaflet.css', {
+      dependencies: { leaflet: '1.9.4' },
+      cdnProvider: 'skypack',
+    });
+    expect(url).toBe('https://esm.sh/leaflet@1.9.4/dist/leaflet.css');
+  });
+
+  it('strips a ?query / #hash suffix from the specifier', () => {
+    const url = buildCSSURL('leaflet/dist/leaflet.css?deps=react@18.3.1', {
+      dependencies: { leaflet: '1.9.4' },
+    });
+    expect(url).toBe('https://esm.sh/leaflet@1.9.4/dist/leaflet.css');
+  });
+
+  it('handles scoped package CSS specifiers', () => {
+    const url = buildCSSURL('@scope/ui/styles.css', {
+      dependencies: { '@scope/ui': '2.0.0' },
+    });
+    expect(url).toBe('https://esm.sh/@scope/ui@2.0.0/styles.css');
   });
 });

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { assembleHTML } from '../../src/transform/assembler';
+import { rewriteImports } from '../../src/transform/rewriter';
 import type { ResolvedProject, ProjectConfig } from '../../src/types';
 
 function project(files: Record<string, string>): ResolvedProject {
@@ -339,5 +340,95 @@ describe('HTMLAssembler', () => {
     expect(dataUriMatch).toBeTruthy();
     const decoded = decodeURIComponent(escape(atob(dataUriMatch![1])));
     expect(decoded).toContain('import.meta');
+  });
+
+  // ── Package CSS imports (regression: blank render) ─────
+
+  it('loads package CSS through the full pipeline as a stylesheet link, not a JS module', () => {
+    const deps = { leaflet: '1.9.4', react: '18.3.1', 'react-dom': '18.3.1' };
+    const proj = project({
+      'index.html':
+        '<html><head></head><body><div id="root"></div><script type="module" src="/src/main.jsx"></script></body></html>',
+      'src/main.jsx': [
+        "import 'leaflet/dist/leaflet.css';",
+        "import 'leaflet.markercluster/dist/MarkerCluster.css';",
+        "import './index.css';",
+        "console.log('boot');",
+      ].join('\n'),
+      'src/index.css': '#root { color: green; }',
+    });
+
+    // Mirror the render pipeline: rewriteImports runs BEFORE assembleHTML.
+    // This is what previously mangled the package CSS into an esm.sh JS-module
+    // URL (with ?deps) that the CSS extractor could no longer recognise.
+    const files = proj.files;
+    for (const [path, content] of files) {
+      if (/\.(js|ts|jsx|tsx|mjs)$/.test(path)) {
+        files.set(
+          path,
+          rewriteImports(content, {
+            dependencies: deps,
+            framework: 'react',
+            reactVersion: deps.react,
+            isVite: true,
+          }),
+        );
+      }
+    }
+
+    const config = staticConfig({
+      type: 'vite',
+      isVite: true,
+      hasJSX: true,
+      framework: 'react',
+      jsEntryPoint: 'src/main.jsx',
+      dependencies: deps,
+    });
+
+    const { html } = assembleHTML({ project: proj, config, transformedFiles: files });
+
+    // Package CSS → real stylesheet <link> from the CDN (version-pinned when known).
+    expect(html).toContain(
+      '<link rel="stylesheet" href="https://esm.sh/leaflet@1.9.4/dist/leaflet.css">',
+    );
+    expect(html).toContain(
+      '<link rel="stylesheet" href="https://esm.sh/leaflet.markercluster/dist/MarkerCluster.css">',
+    );
+
+    // Local CSS → inlined <style>.
+    expect(html).toContain('#root { color: green; }');
+
+    // Cascade: package <link> precedes local <style> so local rules win.
+    expect(html.indexOf('leaflet@1.9.4/dist/leaflet.css')).toBeLessThan(
+      html.indexOf('#root { color: green; }'),
+    );
+
+    // The CSS imports are stripped from the JS module entirely — they must
+    // never reach the browser as module scripts (the cause of the blank
+    // render: "Expected a JavaScript module but got text/css").
+    const main = files.get('src/main.jsx')!;
+    expect(main).not.toContain('.css');
+    expect(main).not.toContain('esm.sh');
+    expect(main).toContain("console.log('boot')");
+  });
+
+  it('does not treat CSS Module imports (with a binding) as side-effect stylesheets', () => {
+    const proj = project({
+      'index.html': '<html><head></head><body></body></html>',
+      'src/main.jsx': [
+        "import styles from './app.module.css';",
+        'console.log(styles);',
+      ].join('\n'),
+      'src/app.module.css': '.title { color: red; }',
+    });
+    const config = staticConfig({ type: 'vite', isVite: true, hasJSX: true });
+    const { html } = assembleHTML({ project: proj, config });
+
+    // CSS Modules must NOT be turned into a CDN stylesheet <link>…
+    expect(html).not.toContain('rel="stylesheet" href="https://esm.sh');
+    // …and the binding import is left untouched for downstream handling.
+    expect(proj.files.get('src/main.jsx')).toContain(
+      "import styles from './app.module.css'",
+    );
   });
 });

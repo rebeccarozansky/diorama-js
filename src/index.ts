@@ -143,6 +143,7 @@ export class Diorama {
         project,
         config,
         transformedFiles: files,
+        cdnProvider: this.options.cdnProvider,
       });
 
       return { html, usesESM, repoName };

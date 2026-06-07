@@ -37,6 +37,38 @@ export function getCDNProvider(name: CDNProviderName): CDNProvider {
   }
 }
 
+/**
+ * Build a raw stylesheet URL for a bare/package CSS specifier such as
+ * `leaflet/dist/leaflet.css`.
+ *
+ * Unlike {@link rewriteImports}, the resulting URL is served as real CSS
+ * (`text/css`) instead of a JS module, so it can be used directly in a
+ * `<link rel="stylesheet">` or a CSS `@import`. The version is pinned from
+ * the project's dependencies (when available) so the stylesheet stays
+ * consistent with the JS imports of the same package.
+ *
+ * `esm.sh` and `unpkg` both serve package CSS at the file path; `skypack`
+ * does not reliably serve raw CSS, so it falls back to `esm.sh`.
+ */
+export function buildCSSURL(
+  specifier: string,
+  options: { dependencies?: Record<string, string>; cdnProvider?: CDNProviderName } = {},
+): string {
+  const { dependencies = {}, cdnProvider = 'esm.sh' } = options;
+  // Drop any ?query / #hash suffix before resolving the package + subpath.
+  const clean = specifier.replace(/[?#].*$/, '');
+  const { packageName, subpath } = parseSpecifier(clean);
+  const version = dependencies[packageName];
+  const ver = version ? `@${version}` : '';
+  const sub = subpath ? `/${subpath}` : '';
+
+  if (cdnProvider === 'unpkg') {
+    // No `?module` here — that would make unpkg return JS instead of CSS.
+    return `https://unpkg.com/${packageName}${ver}${sub}`;
+  }
+  return `https://esm.sh/${packageName}${ver}${sub}`;
+}
+
 // ─── Import rewriting ──────────────────────────────────────────
 
 /** Options for import rewriting. */
@@ -85,6 +117,15 @@ export function rewriteImports(
   function rewriteSpecifier(raw: string): string {
     // Skip relative and absolute-URL specifiers
     if (raw.startsWith('.') || raw.startsWith('/') || /^https?:\/\//.test(raw)) {
+      return raw;
+    }
+
+    // Skip CSS specifiers (including `pkg/dist/x.css?query`). CSS is handled
+    // by the assembler's CSS extractor — inlined as a <style> (local) or
+    // loaded via <link rel="stylesheet"> (package). Rewriting it to a
+    // JS-module URL makes the browser load CSS as a script, which fails with
+    // a "text/css MIME type" error and breaks the whole module graph.
+    if (/\.css(?:[?#]|$)/.test(raw)) {
       return raw;
     }
 

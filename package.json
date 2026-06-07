@@ -1,6 +1,6 @@
 {
   "name": "diorama-js",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Zero-backend JavaScript library that renders GitHub-hosted web projects in a sandboxed iframe",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -75,15 +75,15 @@
     "diorama",
     "diorama-js"
   ],
-  "author": "becca",
+  "author": "Rebecca Rozansky",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/becca/diorama"
+    "url": "git+https://github.com/rebeccarozansky/diorama-js.git"
   },
-  "homepage": "https://github.com/becca/diorama#readme",
+  "homepage": "https://github.com/rebeccarozansky/diorama-js#readme",
   "bugs": {
-    "url": "https://github.com/becca/diorama/issues"
+    "url": "https://github.com/rebeccarozansky/diorama-js/issues"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
